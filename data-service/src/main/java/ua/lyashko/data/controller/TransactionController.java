@@ -40,7 +40,7 @@ public class TransactionController {
 
     @PutMapping("/{id}")
     public ResponseEntity<Transaction> update(@PathVariable Long id, @RequestBody Transaction transaction) {
-        return transactionService.update(id,transaction)
+        return transactionService.update(id, transaction)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }

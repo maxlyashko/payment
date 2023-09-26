@@ -9,5 +9,6 @@ import java.util.List;
 @Repository
 public interface RegularPaymentInstructionRepository extends CrudRepository<RegularPaymentInstruction, Long> {
     List<RegularPaymentInstruction> findByPayerINN(String payerINN);
+
     List<RegularPaymentInstruction> findByPayeeOKPO(String payeeOKPO);
 }

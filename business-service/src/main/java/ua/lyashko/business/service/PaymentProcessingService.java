@@ -9,8 +9,8 @@ import ua.lyashko.commons.entity.Transaction;
 import ua.lyashko.commons.enums.TransactionStatus;
 
 import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Objects;
+import java.util.*;
+import java.util.stream.Collectors;
 
 @Service
 public class PaymentProcessingService {
@@ -27,8 +27,8 @@ public class PaymentProcessingService {
 
     public void validatePayment(RegularPaymentInstruction paymentInstruction) {
         String payerINN = paymentInstruction.getPayerINN();
-        if (payerINN == null || payerINN.length() != 10 || !payerINN.matches("\\d+")) {
-            throw new IllegalArgumentException("Invalid payer INN");
+        if (payerINN==null || payerINN.length()!=10 || !payerINN.matches("\\d+")) {
+            throw new IllegalArgumentException("Invalid payer INN: " + payerINN);
         }
     }
 
@@ -43,7 +43,7 @@ public class PaymentProcessingService {
         int paymentPeriodMinutes = paymentInstruction.getPaymentPeriodMinutes();
         LocalDateTime currentDateTime = LocalDateTime.now();
         if (isInstructionClosed(paymentInstruction)) {
-            if (lastTransactionDateTime == null ||
+            if (lastTransactionDateTime==null ||
                     currentDateTime.isAfter(lastTransactionDateTime.plusMinutes(paymentPeriodMinutes))) {
                 List<Transaction> transactions = getTransactionsByPaymentInstruction(paymentInstruction);
                 if (isInstructionClosed(paymentInstruction)) {
@@ -68,7 +68,7 @@ public class PaymentProcessingService {
             return true;
         }
         boolean allTransactionsStorno = transactions.stream()
-                .allMatch(transaction -> transaction.getTransactionStatus() == TransactionStatus.STORNO);
+                .allMatch(transaction -> transaction.getTransactionStatus()==TransactionStatus.STORNO);
         return !allTransactionsStorno && isAnyTransactionActive(transactions);
     }
 
@@ -84,15 +84,10 @@ public class PaymentProcessingService {
         RegularPaymentInstruction paymentInstruction = restTemplate.getForObject(paymentInstructionBaseUrl + "/" + paymentId, RegularPaymentInstruction.class);
         assert paymentInstruction!=null;
         List<Transaction> transactions = getTransactionsByPaymentInstruction(paymentInstruction);
-        LocalDateTime lastTransactionDateTime = LocalDateTime.MIN;
-
-        for (Transaction transaction : transactions) {
-            if (transaction.getTransactionDateTime().isAfter(lastTransactionDateTime)) {
-                lastTransactionDateTime = transaction.getTransactionDateTime();
-            }
-        }
-
-        return lastTransactionDateTime;
+        return transactions.stream()
+                .map(Transaction::getTransactionDateTime)
+                .max(LocalDateTime::compareTo)
+                .orElse(LocalDateTime.MIN);
     }
 
     public List<RegularPaymentInstruction> getInstructionsForProcessing() {
@@ -100,24 +95,24 @@ public class PaymentProcessingService {
         if (response.getStatusCode().is2xxSuccessful()) {
             RegularPaymentInstruction[] allPaymentInstructions = response.getBody();
             LocalDateTime currentDateTime = LocalDateTime.now();
-            List<RegularPaymentInstruction> instructionsToProcess = new java.util.ArrayList<>();
-
-            if (allPaymentInstructions != null) {
-                for (RegularPaymentInstruction paymentInstruction : allPaymentInstructions) {
-                    LocalDateTime lastTransactionDateTime = getLastTransactionDateTime(paymentInstruction.getId());
-                    int paymentPeriodMinutes = paymentInstruction.getPaymentPeriodMinutes();
-
-                    if (lastTransactionDateTime == null ||
-                            currentDateTime.isAfter(lastTransactionDateTime.plusMinutes(paymentPeriodMinutes))) {
-                        instructionsToProcess.add(paymentInstruction);
-                    }
-                }
+            List<RegularPaymentInstruction> instructionsToProcess = new ArrayList<>();
+            if (allPaymentInstructions!=null) {
+                instructionsToProcess = Arrays.stream(allPaymentInstructions)
+                        .filter(paymentInstruction -> shouldProcessPayment(paymentInstruction, currentDateTime))
+                        .collect(Collectors.toList());
             }
-
             return instructionsToProcess;
         } else {
-            return new java.util.ArrayList<>();
+            return Collections.emptyList();
         }
+    }
+
+    private boolean shouldProcessPayment(RegularPaymentInstruction paymentInstruction, LocalDateTime currentDateTime) {
+        LocalDateTime lastTransactionDateTime = getLastTransactionDateTime(paymentInstruction.getId());
+        int paymentPeriodMinutes = paymentInstruction.getPaymentPeriodMinutes();
+
+        return lastTransactionDateTime==null ||
+                currentDateTime.isAfter(lastTransactionDateTime.plusMinutes(paymentPeriodMinutes));
     }
 
     private Transaction createTransaction(RegularPaymentInstruction paymentInstruction) {
