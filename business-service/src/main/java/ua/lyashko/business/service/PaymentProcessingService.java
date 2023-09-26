@@ -9,10 +9,8 @@ import ua.lyashko.commons.entity.Transaction;
 import ua.lyashko.commons.enums.TransactionStatus;
 
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-
 
 @Service
 public class PaymentProcessingService {
@@ -27,45 +25,51 @@ public class PaymentProcessingService {
         this.transactionBaseUrl = "http://localhost:8081/api/transactions";
     }
 
-    public void validatePayment(RegularPaymentInstruction paymentInstruction) throws IllegalArgumentException {
+    public void validatePayment(RegularPaymentInstruction paymentInstruction) {
         String payerINN = paymentInstruction.getPayerINN();
-        if (payerINN==null || payerINN.length()!=10 || !payerINN.matches("\\d+")) {
+        if (payerINN == null || payerINN.length() != 10 || !payerINN.matches("\\d+")) {
             throw new IllegalArgumentException("Invalid payer INN");
         }
     }
 
     public void createPayment(RegularPaymentInstruction paymentInstruction) {
-        Transaction transaction = new Transaction();
-        transaction.setPaymentInstruction(paymentInstruction);
-        transaction.setTransactionAmount(paymentInstruction.getPaymentAmount());
-        transaction.setTransactionStatus(TransactionStatus.ACTIVE);
-        transaction.setTransactionDateTime(LocalDateTime.now());
-
+        Transaction transaction = createTransaction(paymentInstruction);
         ResponseEntity<Transaction> response = restTemplate.postForEntity(transactionBaseUrl, transaction, Transaction.class);
-
-        if (!response.getStatusCode().is2xxSuccessful()) {
-            throw new RuntimeException("invalid creating payment");
-        }
+        handleResponse(response, "Creating payment");
     }
 
     public void processPayment(RegularPaymentInstruction paymentInstruction) {
         LocalDateTime lastTransactionDateTime = getLastTransactionDateTime(paymentInstruction.getId());
         int paymentPeriodMinutes = paymentInstruction.getPaymentPeriodMinutes();
         LocalDateTime currentDateTime = LocalDateTime.now();
-
-        if (lastTransactionDateTime==null ||
-                currentDateTime.isAfter(lastTransactionDateTime.plusMinutes(paymentPeriodMinutes))) {
-            Transaction transaction = new Transaction();
-            transaction.setPaymentInstruction(paymentInstruction);
-            transaction.setTransactionAmount(paymentInstruction.getPaymentAmount());
-            transaction.setTransactionStatus(TransactionStatus.ACTIVE);
-            transaction.setTransactionDateTime(currentDateTime);
-
-            ResponseEntity<Transaction> response = restTemplate.postForEntity(transactionBaseUrl, transaction, Transaction.class);
-            if (!response.getStatusCode().is2xxSuccessful()) {
-                throw new RuntimeException("invalid processing");
+        if (isInstructionClosed(paymentInstruction)) {
+            if (lastTransactionDateTime == null ||
+                    currentDateTime.isAfter(lastTransactionDateTime.plusMinutes(paymentPeriodMinutes))) {
+                List<Transaction> transactions = getTransactionsByPaymentInstruction(paymentInstruction);
+                if (isInstructionClosed(paymentInstruction)) {
+                    if (transactions.isEmpty() || isAnyTransactionActive(transactions)) {
+                        Transaction transaction = createTransaction(paymentInstruction);
+                        ResponseEntity<Transaction> response = restTemplate.postForEntity(transactionBaseUrl, transaction, Transaction.class);
+                        handleResponse(response, "Processing payment");
+                    }
+                }
             }
         }
+    }
+
+
+    private boolean isAnyTransactionActive(List<Transaction> transactions) {
+        return transactions.stream().noneMatch(transaction -> transaction.getTransactionStatus()==TransactionStatus.ACTIVE);
+    }
+
+    private boolean isInstructionClosed(RegularPaymentInstruction paymentInstruction) {
+        List<Transaction> transactions = getTransactionsByPaymentInstruction(paymentInstruction);
+        if (transactions.isEmpty()) {
+            return true;
+        }
+        boolean allTransactionsStorno = transactions.stream()
+                .allMatch(transaction -> transaction.getTransactionStatus() == TransactionStatus.STORNO);
+        return !allTransactionsStorno && isAnyTransactionActive(transactions);
     }
 
     public void cancelPayment(RegularPaymentInstruction paymentInstruction) {
@@ -81,11 +85,13 @@ public class PaymentProcessingService {
         assert paymentInstruction!=null;
         List<Transaction> transactions = getTransactionsByPaymentInstruction(paymentInstruction);
         LocalDateTime lastTransactionDateTime = LocalDateTime.MIN;
+
         for (Transaction transaction : transactions) {
             if (transaction.getTransactionDateTime().isAfter(lastTransactionDateTime)) {
                 lastTransactionDateTime = transaction.getTransactionDateTime();
             }
         }
+
         return lastTransactionDateTime;
     }
 
@@ -93,24 +99,39 @@ public class PaymentProcessingService {
         ResponseEntity<RegularPaymentInstruction[]> response = restTemplate.getForEntity(paymentInstructionBaseUrl, RegularPaymentInstruction[].class);
         if (response.getStatusCode().is2xxSuccessful()) {
             RegularPaymentInstruction[] allPaymentInstructions = response.getBody();
-            List<RegularPaymentInstruction> instructionsToProcess = new ArrayList<>();
-
             LocalDateTime currentDateTime = LocalDateTime.now();
+            List<RegularPaymentInstruction> instructionsToProcess = new java.util.ArrayList<>();
 
-            assert allPaymentInstructions!=null;
-            for (RegularPaymentInstruction paymentInstruction : allPaymentInstructions) {
-                LocalDateTime lastTransactionDateTime = getLastTransactionDateTime(paymentInstruction.getId());
-                int paymentPeriodMinutes = paymentInstruction.getPaymentPeriodMinutes();
+            if (allPaymentInstructions != null) {
+                for (RegularPaymentInstruction paymentInstruction : allPaymentInstructions) {
+                    LocalDateTime lastTransactionDateTime = getLastTransactionDateTime(paymentInstruction.getId());
+                    int paymentPeriodMinutes = paymentInstruction.getPaymentPeriodMinutes();
 
-                if (lastTransactionDateTime==null ||
-                        currentDateTime.isAfter(lastTransactionDateTime.plusMinutes(paymentPeriodMinutes))) {
-                    instructionsToProcess.add(paymentInstruction);
+                    if (lastTransactionDateTime == null ||
+                            currentDateTime.isAfter(lastTransactionDateTime.plusMinutes(paymentPeriodMinutes))) {
+                        instructionsToProcess.add(paymentInstruction);
+                    }
                 }
             }
 
             return instructionsToProcess;
         } else {
-            return new ArrayList<>();
+            return new java.util.ArrayList<>();
+        }
+    }
+
+    private Transaction createTransaction(RegularPaymentInstruction paymentInstruction) {
+        Transaction transaction = new Transaction();
+        transaction.setPaymentInstruction(paymentInstruction);
+        transaction.setTransactionAmount(paymentInstruction.getPaymentAmount());
+        transaction.setTransactionStatus(TransactionStatus.ACTIVE);
+        transaction.setTransactionDateTime(LocalDateTime.now());
+        return transaction;
+    }
+
+    private void handleResponse(ResponseEntity<?> response, String action) {
+        if (!response.getStatusCode().is2xxSuccessful()) {
+            throw new RuntimeException("Failed to perform " + action);
         }
     }
 
@@ -119,7 +140,7 @@ public class PaymentProcessingService {
         if (response.getStatusCode().is2xxSuccessful()) {
             return List.of(Objects.requireNonNull(response.getBody()));
         } else {
-            return new ArrayList<>();
+            return new java.util.ArrayList<>();
         }
     }
 }

@@ -24,7 +24,6 @@ public class PaymentScheduler {
 
     @Scheduled(fixedRate = 60000)
     public void processScheduledPayments() {
-        System.out.println("schedule start");
         List<RegularPaymentInstruction> paymentsToProcess = getInstructionsForProcessing();
         LocalDateTime currentDateTime = LocalDateTime.now();
 
@@ -35,8 +34,6 @@ public class PaymentScheduler {
             if (lastTransactionDateTime==null ||
                     currentDateTime.isAfter(lastTransactionDateTime.plusMinutes(paymentPeriodMinutes))) {
                 createPayment(payment);
-                System.out.println("schedule finish");
-
             }
         }
     }
@@ -45,14 +42,12 @@ public class PaymentScheduler {
         ResponseEntity<RegularPaymentInstruction[]> response = restTemplate.getForEntity(
                 PAYMENT_SERVICE_URL + "/instructions-for-processing", RegularPaymentInstruction[].class);
         RegularPaymentInstruction[] regularPaymentInstructions = response.getBody();
-        System.out.println(Arrays.toString(regularPaymentInstructions));
         return Arrays.asList(Objects.requireNonNull(regularPaymentInstructions));
     }
 
     private LocalDateTime getLastTransactionDateTime(RegularPaymentInstruction payment) {
         ResponseEntity<LocalDateTime> response = restTemplate.getForEntity(
                 PAYMENT_SERVICE_URL + "/last-transaction-datetime/{id}", LocalDateTime.class, payment.getId());
-
         return response.getBody();
     }
 
